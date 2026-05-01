@@ -53,7 +53,7 @@ class OrchestratorAgent:
     """
     
     def __init__(self, model: str = "llama3.1:8b"):
-        self.llm = ChatOllama(model=model, temperature=0)
+        self.llm = ChatOllama(model=model, temperature=0, format="json")
         
     def plan_and_route(self, state: ResearchState) -> ResearchState:
         """
@@ -88,16 +88,32 @@ class OrchestratorAgent:
             """
             
             response = self.llm.invoke([HumanMessage(content=planning_prompt)])
-            plan = json.loads(response.content)
+            raw = response.content.strip()
+            # Strip markdown code fences if the LLM wrapped the JSON
+            if raw.startswith("```"):
+                raw = raw.split("```", 2)[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.rsplit("```", 1)[0].strip()
+            if not raw:
+                raise ValueError(
+                    "Orchestrator LLM returned an empty response. "
+                    "Check that the Ollama model is running and supports JSON mode."
+                )
+            plan = json.loads(raw)
             
             # State Update mit Plan
+            first_task = next(
+                (entry["task"] for entry in plan["routing_plan"] if entry["agent"] == plan["next_agent"]),
+                plan["subtasks"][0]
+            )
             return {
                 "subtasks": plan["subtasks"],
                 "next_agent": plan["next_agent"],
                 "messages": [{
                     "from": "orchestrator",
                     "to": plan["next_agent"],
-                    "content": f"Bitte bearbeite: {plan['subtasks'][0]}",
+                    "content": f"Bitte bearbeite: {first_task}",
                     "context": plan["routing_plan"]
                 }]
             }
@@ -152,7 +168,7 @@ class WebResearcherAgent:
     
     def __init__(self, model: str = "llama3.1:8b"):
         # Worker-Agenten können günstigere Modelle nutzen!
-        self.llm = ChatOllama(model=model, temperature=0.1)
+        self.llm = ChatOllama(model=model, temperature=0.1, format="json")
     
     def research(self, state: ResearchState) -> ResearchState:
         """
@@ -165,6 +181,11 @@ class WebResearcherAgent:
         # (In echtem System: strukturiertes Message-Parsing)
         latest_message = state["messages"][-1] if state["messages"] else {}
         current_task = latest_message.get("content", state["research_question"])
+        # Strip routing prefixes so the task matches the bare subtask string
+        for _prefix in ("Bitte bearbeite: ", "Nächste Aufgabe: "):
+            if current_task.startswith(_prefix):
+                current_task = current_task[len(_prefix):]
+                break
         
         research_prompt = f"""
         Du bist ein spezialisierter Web-Research-Agent.
@@ -192,7 +213,13 @@ class WebResearcherAgent:
             HumanMessage(content=research_prompt)
         ])
         
-        result = json.loads(response.content)
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
         
         # Zurück an Orchestrator signalisieren
         return {
@@ -219,7 +246,7 @@ class DataAnalyzerAgent:
     
     def __init__(self, model: str = "llama3.1:8b"):
         # Analyzer braucht mehr Reasoning → stärkeres Modell
-        self.llm = ChatOllama(model=model, temperature=0)
+        self.llm = ChatOllama(model=model, temperature=0, format="json")
     
     def analyze(self, state: ResearchState) -> ResearchState:
         # Alle bisherigen Research-Ergebnisse als Kontext nutzen
@@ -228,6 +255,11 @@ class DataAnalyzerAgent:
         
         latest_message = state["messages"][-1] if state["messages"] else {}
         current_task = latest_message.get("content", "Analysiere die vorhandenen Daten")
+        # Strip routing prefixes so the task matches the bare subtask string
+        for _prefix in ("Bitte bearbeite: ", "Nächste Aufgabe: "):
+            if current_task.startswith(_prefix):
+                current_task = current_task[len(_prefix):]
+                break
         
         analysis_prompt = f"""
         Du bist ein Data-Analysis-Agent.
@@ -249,13 +281,19 @@ class DataAnalyzerAgent:
             "quantitative_insights": {{"metric1": "value1"}},
             "data_quality": "high|medium|low",
             "gaps_identified": ["gap1"],
-            "task_completed": "<aktuelle Task>",
+            "task_completed": "{current_task}",
             "confidence": 0.9
         }}
         """
         
         response = self.llm.invoke([HumanMessage(content=analysis_prompt)])
-        result = json.loads(response.content)
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
         
         return {
             "research_results": [{
@@ -326,7 +364,7 @@ class QualityCheckerAgent:
     """
     
     def __init__(self, model: str = "llama3.1:8b"):
-        self.llm = ChatOllama(model=model, temperature=0)
+        self.llm = ChatOllama(model=model, temperature=0, format="json")
     
     def check(self, state: ResearchState) -> ResearchState:
         check_prompt = f"""
@@ -354,7 +392,13 @@ class QualityCheckerAgent:
         """
         
         response = self.llm.invoke([HumanMessage(content=check_prompt)])
-        result = json.loads(response.content)
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
         
         return {
             "quality_score": result["overall_score"],
@@ -364,7 +408,7 @@ class QualityCheckerAgent:
                 "content": f"Quality Score: {result['overall_score']}",
                 "needs_revision": result["needs_revision"]
             }],
-            "next_agent": "orchestrator" if result["needs_revision"] else END
+            "next_agent": "orchestrator" if result["needs_revision"] else "done"
         }
     
 
