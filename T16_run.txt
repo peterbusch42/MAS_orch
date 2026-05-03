@@ -1,0 +1,43 @@
+The project is now backend-configurable instead of Ollama-only. In MAS_orch.py, MAS_orch.py, MAS_orch.py, and MAS_orch.py, `MAS_LLM_BACKEND=ollama|ipex` now selects either the existing Ollama flow or a direct `ipex-llm` XPU backend. The Intel path shares one loaded model across all agents, which is the important change for an Iris Xe laptop because loading separate models per agent would waste memory and kill throughput.
+
+I also documented the setup and added a reproducible GPU dependency file in README.md, README.md, README.md, README.md, requirements.txt, and requirements-gpu.txt. For this T16, the practical default is `Qwen/Qwen2.5-1.5B-Instruct` with `MAS_IPEX_LOAD_IN_4BIT=true` and `MAS_IPEX_CPU_EMBEDDING=true`. I validated imports and graph construction, but I did not run a full first generation through the IPEX backend because that would require downloading the Hugging Face model.
+
+1. Run the app with `MAS_LLM_BACKEND=ipex` and `MAS_HF_MODEL_ID=Qwen/Qwen2.5-1.5B-Instruct` to do the first warm-up inference.
+2. If you want to stay on the Ollama UX but still use Intel GPU, install the `ollama-ipex-llm` portable zip and keep `MAS_LLM_BACKEND=ollama`.
+3. If you want, I can add a small startup self-test that checks XPU availability and benchmarks first-token latency for your chosen local model.
+
+To run the app the way I proposed in step 1, use the Intel XPU backend, not Ollama. That path downloads the Hugging Face model automatically on first run, so you do not need to manually download anything first.
+
+From MAS_orch in PowerShell, with the .venv already activated, run:
+
+$env:MAS_LLM_BACKEND = "ipex"
+$env:MAS_HF_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+$env:MAS_IPEX_LOAD_IN_4BIT = "true"
+$env:MAS_IPEX_CPU_EMBEDDING = "true"
+$env:SYCL_CACHE_PERSISTENT = "1"
+python .\MAS_orch.py
+
+
+That uses the backend configured in MAS_orch.py:137. On first launch, ipex-llm will download Qwen/Qwen2.5-1.5B-Instruct and warm up the Intel Iris Xe GPU. The first run will be noticeably slower than later runs.
+
+If you want to use Ollama instead, then yes, you need to pull a model first. The current default in the app is llama3.1:8b, so the matching Ollama command is:
+
+ollama pull llama3.1:8b
+$env:MAS_LLM_BACKEND = "ollama"
+$env:MAS_OLLAMA_MODEL = "llama3.1:8b"
+python .\MAS_orch.py
+
+For this T16, I would not start with llama3.1:8b unless you specifically want higher quality and accept slower responses. A better Ollama starting point is:
+
+ollama pull qwen2.5:3b
+$env:MAS_LLM_BACKEND = "ollama"
+$env:MAS_OLLAMA_MODEL = "qwen2.5:3b"
+python .\MAS_orch.py
+
+
+.\.venv\Scripts\python.exe .\MAS_orch.py --backend ipex --hf-model-id Qwen/Qwen2.5-1.5B-Instruct --self-test
+
+.\.venv\Scripts\python.exe .\MAS_orch.py --backend ollama --ollama-model qwen2.5:3b --self-test
+
+.\.venv\Scripts\python.exe .\MAS_orch.py --backend ipex --hf-model-id Qwen/Qwen2.5-1.5B-Instruct --self-test-only
+

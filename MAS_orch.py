@@ -1,9 +1,708 @@
-from typing import TypedDict, Annotated, List, Optional
+import argparse
+from copy import deepcopy
+import json
+import operator
+import os
+import time
+from dataclasses import dataclass
+from functools import lru_cache
+from threading import Thread
+from typing import Annotated, Any, List, Optional, TypedDict
+
 from langgraph.graph import StateGraph, END
 from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-import operator
-import json
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+
+_WARMED_UP_IPEX_RUNTIMES: set[tuple[str, bool, bool, bool]] = set()
+_FIRST_GENERATE_IPEX_RUNTIMES: set[tuple[str, bool, bool, bool]] = set()
+_IPEX_UR_ERROR_MARKER = "IPEX XPU generation failed with 'UR error'"
+_IPEX_FALLBACK_ACTIVE = False
+_IPEX_FALLBACK_REASON: Optional[str] = None
+_IPEX_FALLBACK_ANNOUNCED = False
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    backend: str
+    ollama_model: str
+    hf_model_id: str
+    load_in_4bit: bool
+    cpu_embedding: bool
+    optimize_model: bool
+    max_new_tokens: int
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def load_runtime_config() -> RuntimeConfig:
+    backend = os.getenv("MAS_LLM_BACKEND", "ollama").strip().lower()
+    if backend not in {"ollama", "ipex"}:
+        raise ValueError(
+            "MAS_LLM_BACKEND must be either 'ollama' or 'ipex'."
+        )
+
+    return RuntimeConfig(
+        backend=backend,
+        ollama_model=os.getenv("MAS_OLLAMA_MODEL", "llama3.1:8b"),
+        hf_model_id=os.getenv("MAS_HF_MODEL_ID", "Qwen/Qwen2.5-0.5B-Instruct"),
+        load_in_4bit=_env_flag("MAS_IPEX_LOAD_IN_4BIT", True),
+        cpu_embedding=_env_flag("MAS_IPEX_CPU_EMBEDDING", True),
+        optimize_model=_env_flag("MAS_IPEX_OPTIMIZE_MODEL", False),
+        max_new_tokens=int(os.getenv("MAS_MAX_NEW_TOKENS", "768")),
+    )
+
+
+def apply_runtime_overrides(
+    backend: Optional[str] = None,
+    ollama_model: Optional[str] = None,
+    hf_model_id: Optional[str] = None,
+    load_in_4bit: Optional[bool] = None,
+    cpu_embedding: Optional[bool] = None,
+    optimize_model: Optional[bool] = None,
+    max_new_tokens: Optional[int] = None,
+) -> None:
+    if backend is not None:
+        os.environ["MAS_LLM_BACKEND"] = backend
+    if ollama_model is not None:
+        os.environ["MAS_OLLAMA_MODEL"] = ollama_model
+    if hf_model_id is not None:
+        os.environ["MAS_HF_MODEL_ID"] = hf_model_id
+    if load_in_4bit is not None:
+        os.environ["MAS_IPEX_LOAD_IN_4BIT"] = str(load_in_4bit).lower()
+    if cpu_embedding is not None:
+        os.environ["MAS_IPEX_CPU_EMBEDDING"] = str(cpu_embedding).lower()
+    if optimize_model is not None:
+        os.environ["MAS_IPEX_OPTIMIZE_MODEL"] = str(optimize_model).lower()
+    if max_new_tokens is not None:
+        os.environ["MAS_MAX_NEW_TOKENS"] = str(max_new_tokens)
+
+
+def _normalize_prompt(messages: List[Any]) -> List[dict[str, str]]:
+    normalized: List[dict[str, str]] = []
+    for message in messages:
+        if isinstance(message, SystemMessage):
+            role = "system"
+        elif isinstance(message, AIMessage):
+            role = "assistant"
+        else:
+            role = "user"
+
+        normalized.append({"role": role, "content": str(message.content)})
+    return normalized
+
+
+def _select_safe_pad_token_id(tokenizer: Any) -> int:
+    for token_id in (
+        getattr(tokenizer, "pad_token_id", None),
+        getattr(tokenizer, "unk_token_id", None),
+        getattr(tokenizer, "bos_token_id", None),
+        0,
+    ):
+        if token_id is not None:
+            return int(token_id)
+    return 0
+
+
+def _print_ipex_progress(message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] IPEX progress: {message}")
+
+
+def _print_runtime_notice(message: str) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] Runtime: {message}")
+
+
+def _ipex_runtime_key(config: RuntimeConfig) -> tuple[str, bool, bool, bool]:
+    return (
+        config.hf_model_id,
+        config.load_in_4bit,
+        config.cpu_embedding,
+        config.optimize_model,
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_ipex_runtime(
+    model_id: str,
+    load_in_4bit: bool,
+    cpu_embedding: bool,
+    optimize_model: bool,
+):
+    os.environ.setdefault("SYCL_CACHE_PERSISTENT", "1")
+
+    try:
+        import torch
+        from ipex_llm.transformers import AutoModelForCausalLM
+        from transformers import AutoTokenizer
+    except ImportError as exc:
+        raise RuntimeError(
+            "IPEX backend requested, but required packages are missing. "
+            "Install with: pip install --pre --upgrade \"ipex-llm[xpu_2.6]\" "
+            "--extra-index-url https://download.pytorch.org/whl/xpu"
+        ) from exc
+
+    _print_ipex_progress(f"loading tokenizer for {model_id}")
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    tokenizer.pad_token_id = _select_safe_pad_token_id(tokenizer)
+    _print_ipex_progress(f"tokenizer ready; pad_token_id={tokenizer.pad_token_id}")
+
+    _print_ipex_progress(
+        f"loading model weights and running low-bit conversion for {model_id}"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        load_in_4bit=load_in_4bit,
+        cpu_embedding=cpu_embedding,
+        optimize_model=optimize_model,
+        trust_remote_code=True,
+        use_cache=True,
+        attn_implementation="eager",
+    ).to("xpu")
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+    _print_ipex_progress("model load and XPU transfer completed")
+
+    return torch, tokenizer, model
+
+
+def _build_ipex_generation_kwargs(
+    model: Any,
+    tokenizer: Any,
+    *,
+    do_sample: bool,
+    max_new_tokens: int,
+    temperature: Optional[float] = None,
+    extra_kwargs: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    generation_config = deepcopy(model.generation_config)
+    generation_config.pad_token_id = tokenizer.pad_token_id
+    generation_config.eos_token_id = tokenizer.eos_token_id
+    generation_config.do_sample = do_sample
+    generation_config.max_new_tokens = max_new_tokens
+
+    if do_sample:
+        if temperature is not None:
+            generation_config.temperature = temperature
+    else:
+        generation_config.temperature = 1.0
+        generation_config.top_p = 1.0
+        generation_config.top_k = 50
+
+    kwargs: dict[str, Any] = {"generation_config": generation_config}
+    if extra_kwargs:
+        kwargs.update(extra_kwargs)
+    return kwargs
+
+
+def _prepare_ipex_inputs(tokenizer: Any, prompt: str) -> dict[str, Any]:
+    encoded = tokenizer(prompt, return_tensors="pt")
+    return {key: value.to("xpu") for key, value in encoded.items()}
+
+
+def _wrap_ipex_runtime_error(exc: BaseException, config: RuntimeConfig) -> RuntimeError:
+    message = str(exc).strip() or exc.__class__.__name__
+    if "UR error" in message:
+        return RuntimeError(
+            f"{_IPEX_UR_ERROR_MARKER} after successful model load. "
+            "On this Windows Lenovo T16 with Iris Xe, the direct Python IPEX path is currently unstable. "
+            "Use the Ollama backend for normal runs, ideally with the ollama-ipex-llm build if you want Intel GPU acceleration in the server. "
+            f"Current local model: {config.hf_model_id}."
+        )
+    return RuntimeError(message)
+
+
+def _build_ollama_client(config: RuntimeConfig, temperature: float, json_mode: bool = False):
+    options = {"model": config.ollama_model, "temperature": temperature}
+    if json_mode:
+        options["format"] = "json"
+    return ChatOllama(**options)
+
+
+def _is_ipex_ur_error(exc: BaseException) -> bool:
+    return _IPEX_UR_ERROR_MARKER in (str(exc).strip() or exc.__class__.__name__)
+
+
+def _activate_ipex_fallback(config: RuntimeConfig, reason: str) -> None:
+    global _IPEX_FALLBACK_ACTIVE, _IPEX_FALLBACK_REASON, _IPEX_FALLBACK_ANNOUNCED
+
+    _IPEX_FALLBACK_ACTIVE = True
+    _IPEX_FALLBACK_REASON = reason
+    if not _IPEX_FALLBACK_ANNOUNCED:
+        _print_runtime_notice(
+            "Switching from local IPEX XPU inference to Ollama after the known Iris Xe 'UR error'. "
+            f"Ollama model: {config.ollama_model}."
+        )
+        _IPEX_FALLBACK_ANNOUNCED = True
+
+
+class IpexLLMChatAdapter:
+    def __init__(self, config: RuntimeConfig, temperature: float):
+        self.config = config
+        self.temperature = temperature
+        self._warmed_up = False
+
+    def invoke(self, messages: List[Any]) -> AIMessage:
+        runtime_key = _ipex_runtime_key(self.config)
+        torch, tokenizer, model = _load_ipex_runtime(
+            self.config.hf_model_id,
+            self.config.load_in_4bit,
+            self.config.cpu_embedding,
+            self.config.optimize_model,
+        )
+
+        chat_messages = _normalize_prompt(messages)
+        if hasattr(tokenizer, "apply_chat_template"):
+            prompt = tokenizer.apply_chat_template(
+                chat_messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        else:
+            prompt = "\n".join(
+                f"{message['role']}: {message['content']}" for message in chat_messages
+            )
+
+        with torch.inference_mode():
+            model_inputs = _prepare_ipex_inputs(tokenizer, prompt)
+            input_ids = model_inputs["input_ids"]
+            generation_kwargs = _build_ipex_generation_kwargs(
+                model,
+                tokenizer,
+                do_sample=self.temperature > 0,
+                max_new_tokens=self.config.max_new_tokens,
+                temperature=self.temperature if self.temperature > 0 else None,
+            )
+            generation_kwargs.update(model_inputs)
+
+            if runtime_key not in _WARMED_UP_IPEX_RUNTIMES:
+                _print_ipex_progress("starting warm-up generate on XPU")
+                warmup_kwargs = _build_ipex_generation_kwargs(
+                    model,
+                    tokenizer,
+                    do_sample=False,
+                    max_new_tokens=1,
+                )
+                warmup_kwargs.update(model_inputs)
+                try:
+                    model.generate(**warmup_kwargs)
+                except Exception as exc:
+                    raise _wrap_ipex_runtime_error(exc, self.config) from exc
+                _WARMED_UP_IPEX_RUNTIMES.add(runtime_key)
+                _print_ipex_progress("warm-up generate completed")
+
+            if runtime_key not in _FIRST_GENERATE_IPEX_RUNTIMES:
+                _print_ipex_progress("starting first full generate")
+
+            try:
+                output = model.generate(**generation_kwargs)
+            except Exception as exc:
+                raise _wrap_ipex_runtime_error(exc, self.config) from exc
+            generated_tokens = output[:, input_ids.shape[1]:].cpu()
+
+            if runtime_key not in _FIRST_GENERATE_IPEX_RUNTIMES:
+                _FIRST_GENERATE_IPEX_RUNTIMES.add(runtime_key)
+                _print_ipex_progress("first full generate completed")
+
+        content = tokenizer.decode(generated_tokens[0], skip_special_tokens=True).strip()
+        return AIMessage(content=content)
+
+
+class AutoFallbackLLMClient:
+    def __init__(self, config: RuntimeConfig, temperature: float, json_mode: bool = False):
+        self.config = config
+        self.temperature = temperature
+        self.json_mode = json_mode
+        self._ipex_client = IpexLLMChatAdapter(config=config, temperature=temperature)
+        self._ollama_client = _build_ollama_client(
+            config,
+            temperature=temperature,
+            json_mode=json_mode,
+        )
+
+    def invoke(self, messages: List[Any]) -> AIMessage:
+        if _IPEX_FALLBACK_ACTIVE:
+            return self._ollama_client.invoke(messages)
+
+        try:
+            return self._ipex_client.invoke(messages)
+        except RuntimeError as exc:
+            if not _is_ipex_ur_error(exc):
+                raise
+            _activate_ipex_fallback(self.config, str(exc))
+            return self._ollama_client.invoke(messages)
+
+
+def build_llm_client(temperature: float, json_mode: bool = False):
+    config = load_runtime_config()
+    if config.backend == "ipex":
+        return AutoFallbackLLMClient(
+            config=config,
+            temperature=temperature,
+            json_mode=json_mode,
+        )
+
+    return _build_ollama_client(config, temperature=temperature, json_mode=json_mode)
+
+
+def get_xpu_status() -> dict[str, Any]:
+    try:
+        import torch
+    except ImportError as exc:
+        return {
+            "available": False,
+            "reason": f"torch import failed: {exc}",
+        }
+
+    if not hasattr(torch, "xpu"):
+        return {
+            "available": False,
+            "reason": "This torch build does not expose torch.xpu.",
+        }
+
+    available = torch.xpu.is_available()
+    status: dict[str, Any] = {
+        "available": available,
+        "device_count": torch.xpu.device_count() if available else 0,
+    }
+    if available:
+        status["device_name"] = torch.xpu.get_device_name(0)
+    return status
+
+
+def benchmark_ollama_first_token_latency(config: RuntimeConfig) -> float:
+    llm = ChatOllama(model=config.ollama_model, temperature=0)
+    start = time.perf_counter()
+    for chunk in llm.stream([HumanMessage(content="Antworte nur mit OK.")]):
+        if str(chunk.content).strip():
+            return time.perf_counter() - start
+
+    raise RuntimeError("Ollama returned no streamed token content.")
+
+
+def benchmark_ollama_full_generation_latency(config: RuntimeConfig) -> float:
+    llm = ChatOllama(model=config.ollama_model, temperature=0)
+    start = time.perf_counter()
+    response = llm.invoke([HumanMessage(content="Antworte nur mit OK.")])
+    latency = time.perf_counter() - start
+    if not str(response.content).strip():
+        raise RuntimeError("Ollama returned empty content.")
+    return latency
+
+
+def benchmark_ipex_first_token_latency(config: RuntimeConfig) -> float:
+    torch, tokenizer, model = _load_ipex_runtime(
+        config.hf_model_id,
+        config.load_in_4bit,
+        config.cpu_embedding,
+        config.optimize_model,
+    )
+
+    try:
+        from transformers import TextIteratorStreamer
+    except ImportError as exc:
+        raise RuntimeError("transformers TextIteratorStreamer is unavailable.") from exc
+
+    chat_messages = [{"role": "user", "content": "Antworte nur mit OK."}]
+    if hasattr(tokenizer, "apply_chat_template"):
+        prompt = tokenizer.apply_chat_template(
+            chat_messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    else:
+        prompt = "user: Antworte nur mit OK."
+
+    model_inputs = _prepare_ipex_inputs(tokenizer, prompt)
+    streamer = TextIteratorStreamer(
+        tokenizer,
+        skip_prompt=True,
+        skip_special_tokens=True,
+    )
+    generation_kwargs = _build_ipex_generation_kwargs(
+        model,
+        tokenizer,
+        do_sample=False,
+        max_new_tokens=16,
+        extra_kwargs={"streamer": streamer},
+    )
+    generation_kwargs.update(model_inputs)
+
+    generation_error: list[BaseException] = []
+
+    def _generate() -> None:
+        try:
+            model.generate(**generation_kwargs)
+        except BaseException as exc:
+            generation_error.append(_wrap_ipex_runtime_error(exc, config))
+
+    thread = Thread(
+        target=_generate,
+        daemon=True,
+    )
+    start = time.perf_counter()
+    thread.start()
+
+    first_chunk = None
+    for chunk in streamer:
+        if str(chunk).strip():
+            first_chunk = chunk
+            break
+
+    thread.join()
+
+    if generation_error:
+        raise RuntimeError(f"IPEX generate failed: {generation_error[0]}") from generation_error[0]
+
+    if first_chunk is None:
+        raise RuntimeError("IPEX generation returned no streamed token content.")
+
+    return time.perf_counter() - start
+
+
+def benchmark_ipex_full_generation_latency(config: RuntimeConfig) -> float:
+    torch, tokenizer, model = _load_ipex_runtime(
+        config.hf_model_id,
+        config.load_in_4bit,
+        config.cpu_embedding,
+        config.optimize_model,
+    )
+
+    chat_messages = [{"role": "user", "content": "Antworte nur mit OK."}]
+    if hasattr(tokenizer, "apply_chat_template"):
+        prompt = tokenizer.apply_chat_template(
+            chat_messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    else:
+        prompt = "user: Antworte nur mit OK."
+
+    model_inputs = _prepare_ipex_inputs(tokenizer, prompt)
+    input_ids = model_inputs["input_ids"]
+    generation_kwargs = _build_ipex_generation_kwargs(
+        model,
+        tokenizer,
+        do_sample=False,
+        max_new_tokens=16,
+    )
+    generation_kwargs.update(model_inputs)
+
+    with torch.inference_mode():
+        start = time.perf_counter()
+        try:
+            output = model.generate(**generation_kwargs)
+        except Exception as exc:
+            raise _wrap_ipex_runtime_error(exc, config) from exc
+        latency = time.perf_counter() - start
+        generated_tokens = output[:, input_ids.shape[1]:].cpu()
+
+    content = tokenizer.decode(generated_tokens[0], skip_special_tokens=True).strip()
+    if not content:
+        raise RuntimeError("IPEX full generation returned empty content.")
+    return latency
+
+
+def _selected_model_name(config: RuntimeConfig) -> str:
+    return config.hf_model_id if config.backend == "ipex" else config.ollama_model
+
+
+def format_self_test_summary(result: dict[str, Any]) -> str:
+    status = "PASS" if result["success"] else "FAIL"
+    parts = [
+        status,
+        f"backend={result['backend']}",
+        f"model={result['model']}",
+    ]
+    if result.get("metric"):
+        parts.append(f"metric={result['metric']}")
+    if result.get("latency_seconds") is not None:
+        parts.append(f"latency={result['latency_seconds']:.2f}s")
+    if result.get("error"):
+        parts.append(f"error={result['error']}")
+    return " ".join(parts)
+
+
+def run_ipex_smoke_test(config: RuntimeConfig) -> int:
+    print("\n" + "=" * 60)
+    print("IPEX SMOKE TEST")
+    print("=" * 60)
+
+    if config.backend != "ipex":
+        print("IPEX smoke test requires --backend ipex.")
+        return 2
+
+    prompt = "Antworte in genau einem kurzen Satz: GPU smoke test erfolgreich."
+    client = IpexLLMChatAdapter(config=config, temperature=0.0)
+    start = time.perf_counter()
+
+    try:
+        response = client.invoke([HumanMessage(content=prompt)])
+    except Exception as exc:
+        print(f"IPEX smoke test failed: {exc}")
+        print(f"FAIL backend=ipex model={config.hf_model_id} error={exc}")
+        return 1
+
+    latency = time.perf_counter() - start
+    text = str(response.content).strip()
+    print("Smoke test response:")
+    print(text if text else "<empty>")
+    print(f"PASS backend=ipex model={config.hf_model_id} latency={latency:.2f}s")
+    return 0
+
+
+def run_startup_self_test(config: RuntimeConfig) -> dict[str, Any]:
+    print("\n" + "=" * 60)
+    print("SELF-TEST")
+    print("=" * 60)
+
+    result: dict[str, Any] = {
+        "success": False,
+        "backend": config.backend,
+        "model": _selected_model_name(config),
+        "metric": None,
+        "latency_seconds": None,
+        "error": None,
+    }
+
+    xpu_status = get_xpu_status()
+    print(f"XPU available: {xpu_status['available']}")
+    if xpu_status.get("device_count"):
+        print(f"XPU devices: {xpu_status['device_count']}")
+    if xpu_status.get("device_name"):
+        print(f"XPU device 0: {xpu_status['device_name']}")
+    if xpu_status.get("reason"):
+        print(f"XPU status detail: {xpu_status['reason']}")
+
+    try:
+        if config.backend == "ipex":
+            latency = benchmark_ipex_first_token_latency(config)
+            result["success"] = True
+            result["metric"] = "first-token"
+            result["latency_seconds"] = latency
+            print(
+                f"First-token latency for {config.hf_model_id}: {latency:.2f}s"
+            )
+        else:
+            latency = benchmark_ollama_first_token_latency(config)
+            result["success"] = True
+            result["metric"] = "first-token"
+            result["latency_seconds"] = latency
+            print(
+                f"First-token latency for {config.ollama_model}: {latency:.2f}s"
+            )
+    except Exception as exc:
+        print(f"Streaming benchmark unavailable: {exc}")
+        try:
+            if config.backend == "ipex":
+                latency = benchmark_ipex_full_generation_latency(config)
+                result["success"] = True
+                result["metric"] = "full-generation"
+                result["latency_seconds"] = latency
+                print(
+                    f"Fallback full-generation latency for {config.hf_model_id}: {latency:.2f}s"
+                )
+            else:
+                latency = benchmark_ollama_full_generation_latency(config)
+                result["success"] = True
+                result["metric"] = "full-generation"
+                result["latency_seconds"] = latency
+                print(
+                    f"Fallback full-generation latency for {config.ollama_model}: {latency:.2f}s"
+                )
+        except Exception as fallback_exc:
+            result["error"] = str(fallback_exc)
+            print(f"Self-test failed: {fallback_exc}")
+
+    return result
+
+
+def parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the MAS_orch multi-agent research app.",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["ollama", "ipex"],
+        help="Choose the model backend without setting environment variables.",
+    )
+    parser.add_argument(
+        "--ollama-model",
+        help="Ollama model name, for example qwen2.5:3b.",
+    )
+    parser.add_argument(
+        "--hf-model-id",
+        help="Hugging Face model ID for the IPEX backend.",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        help="Maximum number of generated tokens.",
+    )
+    parser.add_argument(
+        "--question",
+        default="Welche Auswirkungen hat Quantum Computing auf aktuelle Kryptographie-Standards?",
+        help="Research question for the orchestrator.",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run a startup self-test that checks XPU visibility and first-token latency.",
+    )
+    parser.add_argument(
+        "--self-test-only",
+        action="store_true",
+        help="Run the startup self-test and exit without starting the research workflow.",
+    )
+    parser.add_argument(
+        "--ipex-smoke-test",
+        action="store_true",
+        help="Load the local IPEX model and run one fixed prompt without starting LangGraph.",
+    )
+    parser.add_argument(
+        "--load-in-4bit",
+        dest="load_in_4bit",
+        action="store_true",
+        help="Enable 4-bit loading for the IPEX backend.",
+    )
+    parser.add_argument(
+        "--no-load-in-4bit",
+        dest="load_in_4bit",
+        action="store_false",
+        help="Disable 4-bit loading for the IPEX backend.",
+    )
+    parser.add_argument(
+        "--cpu-embedding",
+        dest="cpu_embedding",
+        action="store_true",
+        help="Keep embeddings on CPU for the IPEX backend.",
+    )
+    parser.add_argument(
+        "--no-cpu-embedding",
+        dest="cpu_embedding",
+        action="store_false",
+        help="Place embeddings on XPU for the IPEX backend.",
+    )
+    parser.add_argument(
+        "--ipex-optimize-model",
+        dest="optimize_model",
+        action="store_true",
+        help="Enable IPEX optimize_model during low-bit conversion.",
+    )
+    parser.add_argument(
+        "--no-ipex-optimize-model",
+        dest="optimize_model",
+        action="store_false",
+        help="Disable IPEX optimize_model for a more conservative XPU path.",
+    )
+    parser.set_defaults(load_in_4bit=None, cpu_embedding=None, optimize_model=None)
+    return parser.parse_args(argv)
 
 
 # State Definition - zentraler Speicherort für alle Agenten
@@ -52,8 +751,8 @@ class OrchestratorAgent:
     3. Synthesis (Ergebnisse zusammenführen)
     """
     
-    def __init__(self, model: str = "llama3.1:8b"):
-        self.llm = ChatOllama(model=model, temperature=0, format="json")
+    def __init__(self):
+        self.llm = build_llm_client(temperature=0, json_mode=True)
         
     def plan_and_route(self, state: ResearchState) -> ResearchState:
         """
@@ -166,9 +865,8 @@ class WebResearcherAgent:
     Für das Beispiel: Simulated research via LLM
     """
     
-    def __init__(self, model: str = "llama3.1:8b"):
-        # Worker-Agenten können günstigere Modelle nutzen!
-        self.llm = ChatOllama(model=model, temperature=0.1, format="json")
+    def __init__(self):
+        self.llm = build_llm_client(temperature=0.1, json_mode=True)
     
     def research(self, state: ResearchState) -> ResearchState:
         """
@@ -244,9 +942,8 @@ class DataAnalyzerAgent:
     Spezialisiert auf: Quantitative Analyse, Pattern Recognition, Statistiken
     """
     
-    def __init__(self, model: str = "llama3.1:8b"):
-        # Analyzer braucht mehr Reasoning → stärkeres Modell
-        self.llm = ChatOllama(model=model, temperature=0, format="json")
+    def __init__(self):
+        self.llm = build_llm_client(temperature=0, json_mode=True)
     
     def analyze(self, state: ResearchState) -> ResearchState:
         # Alle bisherigen Research-Ergebnisse als Kontext nutzen
@@ -318,8 +1015,8 @@ class SynthesizerAgent:
     Wird IMMER als letzter Agent ausgeführt.
     """
     
-    def __init__(self, model: str = "llama3.1:8b"):
-        self.llm = ChatOllama(model=model, temperature=0.3)
+    def __init__(self):
+        self.llm = build_llm_client(temperature=0.3)
     
     def synthesize(self, state: ResearchState) -> ResearchState:
         all_results = state.get("research_results", [])
@@ -363,8 +1060,8 @@ class QualityCheckerAgent:
     Überprüft ob der Report die Research-Frage tatsächlich beantwortet.
     """
     
-    def __init__(self, model: str = "llama3.1:8b"):
-        self.llm = ChatOllama(model=model, temperature=0, format="json")
+    def __init__(self):
+        self.llm = build_llm_client(temperature=0, json_mode=True)
     
     def check(self, state: ResearchState) -> ResearchState:
         check_prompt = f"""
@@ -524,7 +1221,17 @@ def run_research_system(question: str):
         "final_report": ""
     }
     
+    runtime = load_runtime_config()
+
     print(f"🚀 Starte Research-System für: {question}\n")
+    print(f"LLM-Backend: {runtime.backend}")
+    if runtime.backend == "ollama":
+        print("Connecting to external Ollama server...")
+        print(f"Modell: {runtime.ollama_model}")
+    else:
+        print("Loading Hugging Face model locally on XPU with automatic Ollama fallback...")
+        print(f"Lokales Modell: {runtime.hf_model_id} auf Intel XPU")
+        print(f"Fallback-Modell: {runtime.ollama_model} via Ollama bei bekanntem Iris-Xe-UR-Fehler")
     print("=" * 60)
     
     # Stream-Execution: Jeden Step live beobachten
@@ -562,9 +1269,42 @@ def run_research_system(question: str):
     return final_state
 
 
+def main(argv: Optional[List[str]] = None) -> int:
+    args = parse_cli_args(argv)
+    apply_runtime_overrides(
+        backend=args.backend,
+        ollama_model=args.ollama_model,
+        hf_model_id=args.hf_model_id,
+        load_in_4bit=args.load_in_4bit,
+        cpu_embedding=args.cpu_embedding,
+        optimize_model=args.optimize_model,
+        max_new_tokens=args.max_new_tokens,
+    )
+
+    runtime = load_runtime_config()
+    self_test_result: Optional[dict[str, Any]] = None
+    if args.ipex_smoke_test:
+        return run_ipex_smoke_test(runtime)
+
+    if args.self_test or args.self_test_only:
+        self_test_result = run_startup_self_test(runtime)
+
+    if args.self_test_only:
+        print(format_self_test_summary(self_test_result or {
+            "success": False,
+            "backend": runtime.backend,
+            "model": _selected_model_name(runtime),
+            "metric": None,
+            "latency_seconds": None,
+            "error": "self-test did not run",
+        }))
+        return 0 if self_test_result and self_test_result["success"] else 1
+
+    run_research_system(args.question)
+    return 0
+
+
 # Ausführung
 if __name__ == "__main__":
-    result = run_research_system(
-        "Welche Auswirkungen hat Quantum Computing auf aktuelle Kryptographie-Standards?"
-    )
+    raise SystemExit(main())
 

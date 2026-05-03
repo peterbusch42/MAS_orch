@@ -1,0 +1,212 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Agentic Patterns Comparison" id="eQkiihz-S26HEkpCnGEP">
+    <mxGraphModel dx="940" dy="426" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-2" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#f8cecc;strokeColor=#b85450;" value="&lt;b&gt;ResearchState (TypedDict)&lt;/b&gt;&lt;br&gt;Zentraler Datenspeicher" vertex="1">
+          <mxGeometry height="100" width="280" x="440" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" value="&lt;b&gt;OrchestratorAgent&lt;/b&gt;&lt;div&gt;&lt;i&gt;Steuert den Flow&lt;/i&gt;&lt;/div&gt;&lt;hr&gt;&lt;div style=&quot;text-align: left;&quot;&gt;- plan_and_route()&lt;/div&gt;" vertex="1">
+          <mxGeometry height="90" width="200" x="480" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-4" parent="1" style="whiteSpace=wrap;html=1;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="&lt;b&gt;WebResearcherAgent&lt;/b&gt;&lt;div&gt;&lt;i&gt;Spezialist für Recherche&lt;/i&gt;&lt;/div&gt;&lt;hr&gt;&lt;div style=&quot;text-align: left;&quot;&gt;- research()&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="180" x="132" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-5" parent="1" style="whiteSpace=wrap;html=1;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="&lt;b&gt;DataAnalyzerAgent&lt;/b&gt;&lt;div&gt;&lt;i&gt;Spezialist für Analyse&lt;/i&gt;&lt;/div&gt;&lt;hr&gt;&lt;div style=&quot;text-align: left;&quot;&gt;- analyze()&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="180" x="340" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-6" parent="1" style="whiteSpace=wrap;html=1;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="&lt;b&gt;SynthesizerAgent&lt;/b&gt;&lt;div&gt;&lt;i&gt;Erstellt den Endreport&lt;/i&gt;&lt;/div&gt;&lt;hr&gt;&lt;div style=&quot;text-align: left;&quot;&gt;- synthesize()&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="180" x="640" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-7" parent="1" style="whiteSpace=wrap;html=1;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="&lt;b&gt;QualityCheckerAgent&lt;/b&gt;&lt;div&gt;&lt;i&gt;Validiert den Output&lt;/i&gt;&lt;/div&gt;&lt;hr&gt;&lt;div style=&quot;text-align: left;&quot;&gt;- check()&lt;/div&gt;" vertex="1">
+          <mxGeometry height="80" width="180" x="860" y="470" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-8" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-2" style="endArrow=classic;html=1;rounded=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="NVCGw-wfo0-gpxeOk07p-3" value="Liest &amp;amp; Schreibt">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="570" y="220" as="sourcePoint" />
+            <mxPoint x="620" y="170" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-9" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-2" style="endArrow=classic;html=1;rounded=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.25;exitY=1;exitDx=0;exitDy=0;" target="NVCGw-wfo0-gpxeOk07p-4" value="Liest State">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <Array as="points">
+              <mxPoint x="510" y="240" />
+              <mxPoint x="222" y="240" />
+            </Array>
+            <mxPoint x="580" y="230" as="sourcePoint" />
+            <mxPoint x="210" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-10" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-4" style="endArrow=classic;html=1;rounded=0;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.145;entryY=1;entryDx=0;entryDy=-4.35;dashed=1;entryPerimeter=0;" target="NVCGw-wfo0-gpxeOk07p-2" value="Schreibt in State">
+          <mxGeometry height="50" relative="1" width="50" x="0.6627" y="20" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="177" y="220" />
+              <mxPoint x="481" y="220" />
+            </Array>
+            <mxPoint x="220" y="460" as="sourcePoint" />
+            <mxPoint x="520" y="190" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-11" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-2" style="endArrow=classic;html=1;rounded=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.4;exitY=1;exitDx=0;exitDy=0;" target="NVCGw-wfo0-gpxeOk07p-5" value="Liest State">
+          <mxGeometry height="50" relative="1" width="50" x="0.5631" y="30" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="552" y="260" />
+              <mxPoint x="430" y="260" />
+            </Array>
+            <mxPoint x="519" y="190" as="sourcePoint" />
+            <mxPoint x="430" y="460" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-12" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-5" style="endArrow=classic;html=1;rounded=0;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.325;entryY=0.99;entryDx=0;entryDy=0;dashed=1;entryPerimeter=0;" target="NVCGw-wfo0-gpxeOk07p-2" value="Schreibt in State">
+          <mxGeometry height="50" relative="1" width="50" x="-0.1285" y="45" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="385" y="250" />
+              <mxPoint x="470" y="250" />
+              <mxPoint x="530" y="250" />
+            </Array>
+            <mxPoint x="440" y="460" as="sourcePoint" />
+            <mxPoint x="562" y="190" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-13" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-2" style="endArrow=classic;html=1;rounded=0;entryX=0.556;entryY=0.007;entryDx=0;entryDy=0;exitX=0.6;exitY=1;exitDx=0;exitDy=0;entryPerimeter=0;" target="NVCGw-wfo0-gpxeOk07p-6" value="Liest State">
+          <mxGeometry height="50" relative="1" width="50" x="-0.1386" y="-10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="608" y="260" />
+              <mxPoint x="740" y="260" />
+            </Array>
+            <mxPoint x="618" y="190" as="sourcePoint" />
+            <mxPoint x="730" y="460" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-14" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-6" style="endArrow=classic;html=1;rounded=0;exitX=0.75;exitY=0;exitDx=0;exitDy=0;entryX=0.671;entryY=1.01;entryDx=0;entryDy=0;dashed=1;entryPerimeter=0;" target="NVCGw-wfo0-gpxeOk07p-2" value="Schreibt in State">
+          <mxGeometry height="50" relative="1" width="50" x="-0.0793" y="-40" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="775" y="250" />
+              <mxPoint x="670" y="250" />
+              <mxPoint x="628" y="250" />
+            </Array>
+            <mxPoint x="740" y="460" as="sourcePoint" />
+            <mxPoint x="618" y="190" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-15" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-2" style="endArrow=classic;html=1;rounded=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.75;exitY=1;exitDx=0;exitDy=0;" target="NVCGw-wfo0-gpxeOk07p-7" value="Liest State">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="240" />
+              <mxPoint x="950" y="240" />
+            </Array>
+            <mxPoint x="650" y="190" as="sourcePoint" />
+            <mxPoint x="950" y="460" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-16" edge="1" parent="1" style="endArrow=classic;html=1;rounded=0;entryX=0.855;entryY=1;entryDx=0;entryDy=-4.35;dashed=1;entryPerimeter=0;" target="NVCGw-wfo0-gpxeOk07p-2" value="Schreibt in State">
+          <mxGeometry height="50" relative="1" width="50" x="0.6656" y="-20" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="990" y="220" />
+              <mxPoint x="680" y="220" />
+            </Array>
+            <mxPoint x="988" y="470" as="sourcePoint" />
+            <mxPoint x="660" y="190" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-17" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" value="Worker Agents" vertex="1">
+          <mxGeometry height="30" width="160" x="500" y="420" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-18" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-3" style="endArrow=classic;html=1;rounded=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" value="Delegiert an">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="325" />
+            </Array>
+            <mxPoint x="470" y="335" as="sourcePoint" />
+            <mxPoint x="300" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-19" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-3" style="endArrow=classic;html=1;rounded=0;exitX=0.25;exitY=1;exitDx=0;exitDy=0;" target="NVCGw-wfo0-gpxeOk07p-5" value="Delegiert an">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="530" y="380" as="sourcePoint" />
+            <mxPoint x="440" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-20" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-3" style="endArrow=classic;html=1;rounded=0;exitX=0.75;exitY=1;exitDx=0;exitDy=0;" target="NVCGw-wfo0-gpxeOk07p-6" value="Delegiert an">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="640" y="380" as="sourcePoint" />
+            <mxPoint x="730" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-21" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-3" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.289;entryY=-0.012;entryDx=0;entryDy=0;entryPerimeter=0;" target="NVCGw-wfo0-gpxeOk07p-7" value="Delegiert an">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <Array as="points">
+              <mxPoint x="870" y="325" />
+              <mxPoint x="910" y="325" />
+            </Array>
+            <mxPoint x="690" y="335" as="sourcePoint" />
+            <mxPoint x="950" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-22" parent="1" style="shape=process;whiteSpace=wrap;html=1;backgroundOutline=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="&lt;b&gt;Graph Abstraction (LangGraph)&lt;/b&gt;&lt;br&gt;&lt;i&gt;Definiert die Struktur und den Flow&lt;/i&gt;" vertex="1">
+          <mxGeometry height="100" width="360" x="400" y="620" as="geometry" />
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-23" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-22" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="NVCGw-wfo0-gpxeOk07p-3" value="Beinhaltet">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <Array as="points">
+              <mxPoint x="580" y="590" />
+            </Array>
+            <mxPoint x="580" y="610" as="sourcePoint" />
+            <mxPoint x="580" y="380" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-24" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-22" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" value="Beinhaltet">
+          <mxGeometry height="50" relative="1" width="50" x="0.6364" y="10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="580" y="580" />
+              <mxPoint x="210" y="580" />
+            </Array>
+            <mxPoint x="590" y="630" as="sourcePoint" />
+            <mxPoint x="210" y="550" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-25" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-22" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="NVCGw-wfo0-gpxeOk07p-5" value="Beinhaltet">
+          <mxGeometry height="50" relative="1" width="50" x="0.4545" y="-10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="580" y="580" />
+              <mxPoint x="430" y="580" />
+            </Array>
+            <mxPoint x="220" y="670" as="sourcePoint" />
+            <mxPoint x="430" y="560" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-26" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-22" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="NVCGw-wfo0-gpxeOk07p-6" value="Beinhaltet">
+          <mxGeometry height="50" relative="1" width="50" x="0.9091" y="-30" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="580" y="580" />
+              <mxPoint x="730" y="580" />
+            </Array>
+            <mxPoint x="590" y="590" as="sourcePoint" />
+            <mxPoint x="730" y="560" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="NVCGw-wfo0-gpxeOk07p-27" edge="1" parent="1" source="NVCGw-wfo0-gpxeOk07p-22" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="NVCGw-wfo0-gpxeOk07p-7" value="Beinhaltet">
+          <mxGeometry height="50" relative="1" width="50" x="0.7727" y="-10" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="580" y="580" />
+              <mxPoint x="950" y="580" />
+            </Array>
+            <mxPoint x="740" y="670" as="sourcePoint" />
+            <mxPoint x="950" y="560" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
