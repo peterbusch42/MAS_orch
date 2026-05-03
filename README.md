@@ -1,5 +1,13 @@
 # MAS_orch
 
+
+## Langsmith Env:
+$env:LANGSMITH_API_KEY = "API key"
+$env:LANGSMITH_TRACING = "true"
+$env:LANGSMITH_PROJECT = "MAS_orch"
+$env:LANGSMITH_ENDPOINT = "https://eu.api.smith.langchain.com"
+
+
 This project can now run with either:
 
 1. Ollama as an external local inference server.
