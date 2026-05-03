@@ -1,0 +1,7 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "dependencies": ["."],
+  "graphs": {
+    "mas_orch": "./MAS_orch.py:create_research_graph"
+  }
+}

@@ -1,0 +1,27 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	orchestrator(orchestrator)
+	web_researcher(web_researcher)
+	data_analyzer(data_analyzer)
+	synthesizer(synthesizer)
+	quality_checker(quality_checker)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> orchestrator;
+	data_analyzer --> orchestrator;
+	orchestrator -.-> data_analyzer;
+	orchestrator -.-> quality_checker;
+	orchestrator -.-> synthesizer;
+	orchestrator -.-> web_researcher;
+	quality_checker -.-> __end__;
+	quality_checker -.-> orchestrator;
+	synthesizer --> quality_checker;
+	web_researcher --> orchestrator;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+

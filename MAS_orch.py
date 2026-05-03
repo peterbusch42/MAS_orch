@@ -119,6 +119,19 @@ def _print_runtime_notice(message: str) -> None:
     print(f"[{timestamp}] Runtime: {message}")
 
 
+def _export_mermaid_graph(app: Any) -> str:
+    mermaid_graph = app.get_graph().draw_mermaid()
+    output_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "MAS_orch_graph.mmd",
+    )
+    with open(output_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(mermaid_graph)
+        handle.write("\n")
+    _print_runtime_notice(f"Saved Mermaid graph to {output_path}")
+    return mermaid_graph
+
+
 def _ipex_runtime_key(config: RuntimeConfig) -> tuple[str, bool, bool, bool]:
     return (
         config.hf_model_id,
@@ -1207,6 +1220,7 @@ def run_research_system(question: str):
     
     # Graph kompilieren
     app = create_research_graph()
+    _export_mermaid_graph(app)
     
     # Initial State
     initial_state: ResearchState = {
